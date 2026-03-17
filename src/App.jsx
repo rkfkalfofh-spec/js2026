@@ -34,14 +34,13 @@ import {
  */
 
 const firebaseConfig = {
-  apiKey: "여기에_API_KEY",
-  authDomain: "여기에_AUTH_DOMAIN",
-  projectId: "여기에_PROJECT_ID",
-  storageBucket: "여기에_STORAGE_BUCKET",
-  messagingSenderId: "여기에_MESSAGING_SENDER_ID",
-  appId: "여기에_APP_ID",
+  apiKey: "AIzaSyDPVriaKAKr2JSoXcrnxKL27cEZV2XqWNg",
+  authDomain: "js2026-1.firebaseapp.com",
+  projectId: "js2026-1",
+  storageBucket: "js2026-1.firebasestorage.app",
+  messagingSenderId: "769074018131",
+  appId: "1:769074018131:web:f47cf102d399a9e9ea53a6"
 };
-
 const app = initializeApp(firebaseConfig);
 const db = getFirestore(app);
 const auth = getAuth(app);
