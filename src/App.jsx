@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import { initializeApp } from "firebase/app";
 import {
   collection,
+  deleteDoc,
   doc,
   getDoc,
   getDocs,
@@ -11,7 +12,7 @@ import {
   query,
   serverTimestamp,
   setDoc,
-  updateDoc,
+  writeBatch,
 } from "firebase/firestore";
 import {
   getAuth,
@@ -26,35 +27,23 @@ import {
  * - 같은 코드 재접속 시 수정 가능
  * - 총점 동점 시 공동순위
  * - 관리자 이메일/비밀번호 로그인
- * - 관리자 페이지에서 코드 추가 / 투표 마감 / CSV 다운로드
+ * - 관리자 페이지에서 코드 추가 / 투표 마감 / CSV 다운로드 / 투표 초기화
  * - Firestore 저장
- *
- * 사용 전 준비:
- * 1) npm install firebase
- * 2) 아래 firebaseConfig를 본인 프로젝트 값으로 교체
- * 3) Firebase Authentication에서 Email/Password 활성화
- * 4) 관리자 계정 1개 생성
- * 5) Firestore Database 생성
- * 6) 응답용 참여코드는 관리자 페이지에서 추가
+ * - 이미 입력한 순위는 강조 표시 + 중복 입력 차단
+ * - 제출 결과는 alert 팝업으로 안내
  */
 
-// Import the functions you need from the SDKs you need
-// TODO: Add SDKs for Firebase products that you want to use
-// https://firebase.google.com/docs/web/setup#available-libraries
-
-// Your web app's Firebase configuration
 const firebaseConfig = {
-  apiKey: "AIzaSyDPVriaKAKr2JSoXcrnxKL27cEZV2XqWNg",
-  authDomain: "js2026-1.firebaseapp.com",
-  projectId: "js2026-1",
-  storageBucket: "js2026-1.firebasestorage.app",
-  messagingSenderId: "769074018131",
-  appId: "1:769074018131:web:f47cf102d399a9e9ea53a6"
+  apiKey: "여기에_API_KEY",
+  authDomain: "여기에_AUTH_DOMAIN",
+  projectId: "여기에_PROJECT_ID",
+  storageBucket: "여기에_STORAGE_BUCKET",
+  messagingSenderId: "여기에_MESSAGING_SENDER_ID",
+  appId: "여기에_APP_ID",
 };
 
-// Initialize Firebase
 const app = initializeApp(firebaseConfig);
-	const db = getFirestore(app);
+const db = getFirestore(app);
 const auth = getAuth(app);
 
 const TASK_GROUPS = [
@@ -80,7 +69,7 @@ const TASK_GROUPS = [
   { id: 7, items: ["학생자치회(학급·전교, 자치회 행사)", "꿈·끼 찾기 발표회(학생자치회 주관)"] },
   { id: 8, items: ["계기교육(평화통일, 독도, 경제교육 등)", "학생봉사활동"] },
   { id: 9, items: ["세계시민교육(민주시민교육, 국제교류)", "학생동아리"] },
-  { id: 10, items: ["6학년 종일배정", "다문화 교육"] },
+  { id: 10, items: ["6학년 중입배정", "다문화 교육"] },
   { id: 11, items: ["6학년 졸업앨범", "영재·발명교육"] },
   { id: 12, items: ["특수교육", "개별화교육", "특수교육대상학생", "통합교육지원 등"] },
   {
@@ -88,7 +77,7 @@ const TASK_GROUPS = [
     items: [
       "영양교육 및 식생활지도",
       "아동급식(식단작성 및 영양관리, 식재료 선정 및 검수, 배식관리, 위생관리, 급식소위원회 관리 등)",
-      "결식아동 및 저소득층 아동 급식비 관리",
+      "결식아동 및 무상우유 학생지원관리",
     ],
   },
   {
@@ -96,7 +85,7 @@ const TASK_GROUPS = [
     items: [
       "학교도서관 운영",
       "도서구입 및 관리",
-      "독서교육 기획 및 지도(대외 독서행사)",
+      "독서교육 기획 및 지도(대내외 독서행사)",
       "도서도우미 운영",
       "문예행사지원(글쓰기)",
     ],
@@ -106,7 +95,7 @@ const TASK_GROUPS = [
     items: [
       "상담교육(Wee Class 운영)",
       "학부모상담",
-      "또래조정",
+      "또래중조",
       "학생정서·행동특성검사",
       "학교폭력업무지원(전담기구)",
       "생명존중교육(위기학생관리)",
@@ -266,6 +255,15 @@ function formatDate(ts) {
   return date.toLocaleString("ko-KR");
 }
 
+function getUsedRanks(ranks, currentId) {
+  const used = new Set();
+  Object.entries(ranks).forEach(([id, value]) => {
+    if (Number(id) === Number(currentId)) return;
+    if (value !== "") used.add(Number(value));
+  });
+  return used;
+}
+
 export default function App() {
   const [codeInput, setCodeInput] = useState("");
   const [activeCode, setActiveCode] = useState("");
@@ -273,6 +271,8 @@ export default function App() {
   const [message, setMessage] = useState("");
   const [isClosed, setIsClosed] = useState(false);
   const [loadingParticipant, setLoadingParticipant] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [resettingVotes, setResettingVotes] = useState(false);
 
   const [adminUser, setAdminUser] = useState(null);
   const [adminEmail, setAdminEmail] = useState("");
@@ -342,6 +342,7 @@ export default function App() {
 
       if (!normalized) {
         setMessage("참여코드를 입력해야 합니다.");
+        alert("참여코드를 입력해야 합니다.");
         return;
       }
 
@@ -350,6 +351,7 @@ export default function App() {
 
       if (!codeSnap.exists() || codeSnap.data().active !== true) {
         setMessage("유효하지 않은 참여코드입니다.");
+        alert("유효하지 않은 참여코드입니다.");
         return;
       }
 
@@ -362,12 +364,15 @@ export default function App() {
         const data = ballotSnap.data();
         setRanks(data.ranks || makeEmptyRanks());
         setMessage("기존 응답을 불러왔습니다. 수정 후 다시 제출하면 덮어쓰기됩니다.");
+        alert("기존 응답을 불러왔습니다. 수정 후 다시 제출하면 덮어쓰기됩니다.");
       } else {
         setRanks(makeEmptyRanks());
         setMessage("새 응답을 입력할 수 있습니다.");
+        alert("새 응답을 입력할 수 있습니다.");
       }
     } catch (error) {
       setMessage(`코드 확인 중 오류가 발생했습니다: ${error.message}`);
+      alert(`코드 확인 중 오류가 발생했습니다: ${error.message}`);
     } finally {
       setLoadingParticipant(false);
     }
@@ -380,24 +385,39 @@ export default function App() {
     }
 
     if (!/^\d+$/.test(value)) return;
+
+    const num = Number(value);
+    if (num < 1 || num > TASK_GROUPS.length) return;
+
+    const usedRanks = getUsedRanks(ranks, groupId);
+    if (usedRanks.has(num)) {
+      alert(`이미 ${num}위는 다른 항목에 입력되어 있습니다.`);
+      return;
+    }
+
     setRanks((prev) => ({ ...prev, [groupId]: value }));
   };
 
   const submitBallot = async () => {
     try {
+      setSubmitting(true);
+
       if (isClosed) {
         setMessage("현재 투표가 마감되었습니다.");
+        alert("현재 투표가 마감되었습니다.");
         return;
       }
 
       if (!activeCode) {
         setMessage("먼저 참여코드를 확인해야 합니다.");
+        alert("먼저 참여코드를 확인해야 합니다.");
         return;
       }
 
       const error = validateRanks(ranks);
       if (error) {
         setMessage(error);
+        alert(error);
         return;
       }
 
@@ -412,8 +432,12 @@ export default function App() {
       );
 
       setMessage("저장되었습니다. 같은 참여코드로 다시 접속하면 수정할 수 있습니다.");
+      alert("저장 완료: 정상적으로 제출되었습니다. 같은 참여코드로 다시 접속하면 수정할 수 있습니다.");
     } catch (error) {
       setMessage(`저장 중 오류가 발생했습니다: ${error.message}`);
+      alert(`저장 중 오류가 발생했습니다: ${error.message}`);
+    } finally {
+      setSubmitting(false);
     }
   };
 
@@ -466,6 +490,47 @@ export default function App() {
     alert("예시 참여코드를 추가했습니다.");
   };
 
+  const resetAllVotes = async () => {
+    const firstConfirm = window.confirm("정말 투표 기록을 초기화하시겠습니까? 이 작업은 되돌릴 수 없습니다.");
+    if (!firstConfirm) return;
+
+    const secondConfirm = window.confirm("한 번 더 확인합니다. ballots 컬렉션의 모든 투표 기록이 삭제됩니다. 계속하시겠습니까?");
+    if (!secondConfirm) return;
+
+    try {
+      setResettingVotes(true);
+      const ballotSnap = await getDocs(collection(db, "ballots"));
+
+      if (ballotSnap.empty) {
+        alert("삭제할 투표 기록이 없습니다.");
+        return;
+      }
+
+      let batch = writeBatch(db);
+      let count = 0;
+
+      for (const ballotDoc of ballotSnap.docs) {
+        batch.delete(ballotDoc.ref);
+        count += 1;
+
+        if (count % 450 === 0) {
+          await batch.commit();
+          batch = writeBatch(db);
+        }
+      }
+
+      if (count % 450 !== 0) {
+        await batch.commit();
+      }
+
+      alert("투표 기록 초기화가 완료되었습니다.");
+    } catch (error) {
+      alert(`투표 기록 초기화 중 오류가 발생했습니다: ${error.message}`);
+    } finally {
+      setResettingVotes(false);
+    }
+  };
+
   if (adminUser) {
     return (
       <div style={{ maxWidth: 1200, margin: "0 auto", padding: 24, fontFamily: "Arial, sans-serif", color: "#111827" }}>
@@ -480,6 +545,9 @@ export default function App() {
             {isClosed ? "투표 재개" : "투표 마감"}
           </button>
           <button style={buttonStyle("light")} onClick={() => downloadCSV(ballots)}>원자료 CSV 다운로드</button>
+          <button style={buttonStyle("danger")} onClick={resetAllVotes} disabled={resettingVotes}>
+            {resettingVotes ? "초기화 중..." : "투표 초기화"}
+          </button>
           <button style={buttonStyle("light")} onClick={logoutAdmin}>관리자 로그아웃</button>
         </div>
 
@@ -604,34 +672,50 @@ export default function App() {
         />
       </div>
 
-      {TASK_GROUPS.map((group) => (
-        <div key={group.id} style={cardStyle()}>
-          <div style={{ display: "grid", gridTemplateColumns: "90px 1fr", gap: 16, alignItems: "start" }}>
-            <div>
-              <div style={{ fontSize: 13, marginBottom: 6, color: "#374151" }}>순위</div>
-              <input
-                type="number"
-                min="1"
-                max={TASK_GROUPS.length}
-                style={inputStyle(80)}
-                value={ranks[group.id]}
-                onChange={(e) => handleRankChange(group.id, e.target.value)}
-              />
-            </div>
-            <div>
-              <div style={{ fontWeight: 700, marginBottom: 8 }}>업무 내용</div>
-              {group.items.map((item) => (
-                <div key={item} style={{ lineHeight: 1.7, paddingLeft: 2 }}>
-                  {item}
-                </div>
-              ))}
+      {TASK_GROUPS.map((group) => {
+        const usedRanks = getUsedRanks(ranks, group.id);
+        const currentValue = Number(ranks[group.id]);
+
+        return (
+          <div key={group.id} style={cardStyle()}>
+            <div style={{ display: "grid", gridTemplateColumns: "110px 1fr", gap: 16, alignItems: "start" }}>
+              <div>
+                <div style={{ fontSize: 13, marginBottom: 6, color: "#374151" }}>순위</div>
+                <select
+                  style={{
+                    ...inputStyle(90),
+                    background: ranks[group.id] ? "#ecfdf5" : "#ffffff",
+                    border: ranks[group.id] ? "1px solid #10b981" : "1px solid #cfcfcf",
+                  }}
+                  value={ranks[group.id]}
+                  onChange={(e) => handleRankChange(group.id, e.target.value)}
+                >
+                  <option value="">선택</option>
+                  {Array.from({ length: TASK_GROUPS.length }, (_, idx) => idx + 1).map((num) => {
+                    const disabled = usedRanks.has(num) && currentValue !== num;
+                    return (
+                      <option key={num} value={num} disabled={disabled}>
+                        {disabled ? `${num}위 (사용중)` : `${num}위`}
+                      </option>
+                    );
+                  })}
+                </select>
+              </div>
+              <div>
+                <div style={{ fontWeight: 700, marginBottom: 8 }}>업무 내용</div>
+                {group.items.map((item) => (
+                  <div key={item} style={{ lineHeight: 1.7, paddingLeft: 2 }}>
+                    {item}
+                  </div>
+                ))}
+              </div>
             </div>
           </div>
-        </div>
-      ))}
+        );
+      })}
 
-      <button style={buttonStyle(isClosed ? "light" : "default")} onClick={submitBallot} disabled={isClosed}>
-        제출
+      <button style={buttonStyle(isClosed ? "light" : "default")} onClick={submitBallot} disabled={isClosed || submitting}>
+        {submitting ? "제출 중..." : "제출"}
       </button>
     </div>
   );
