@@ -477,16 +477,58 @@ export default function App() {
     setNewCodeInput("");
   };
 
-  const seedExampleCodes = async () => {
-    const seedList = ["A7K9Q2", "M4P8LX", "T2W6NC", "R8V3ME", "K9D2PT"];
-    for (const code of seedList) {
+    const seedExampleCodes = async () => {
+    const countText = window.prompt("추가로 생성할 참여코드 개수를 입력하세요.", "5");
+    if (countText === null) return;
+
+    const count = Number(countText);
+    if (!Number.isInteger(count) || count < 1 || count > 100) {
+      alert("1~100 사이의 정수를 입력해야 합니다.");
+      return;
+    }
+
+    const existingCodeSet = new Set(codes.map((c) => c.id));
+    const newCodes = [];
+
+    while (newCodes.length < count) {
+      const code = Math.random().toString(36).slice(2, 8).toUpperCase();
+      if (!existingCodeSet.has(code)) {
+        existingCodeSet.add(code);
+        newCodes.push(code);
+      }
+    }
+
+    for (const code of newCodes) {
       await setDoc(
         doc(db, "codes", code),
         { active: true, createdAt: serverTimestamp() },
         { merge: true }
       );
     }
-    alert("예시 참여코드를 추가했습니다.");
+
+    alert(`${newCodes.length}개의 참여코드를 추가했습니다.`);
+  };
+
+  const deleteCode = async (codeId) => {
+    const firstConfirm = window.confirm(`${codeId} 참여코드를 삭제하시겠습니까?`);
+    if (!firstConfirm) return;
+
+    const hasBallot = ballots.some((b) => b.code === codeId);
+    const secondMessage = hasBallot
+      ? `${codeId}의 투표 기록도 함께 삭제됩니다. 계속하시겠습니까?`
+      : `${codeId} 코드를 정말 삭제하시겠습니까?`;
+    const secondConfirm = window.confirm(secondMessage);
+    if (!secondConfirm) return;
+
+    try {
+      await deleteDoc(doc(db, "codes", codeId));
+      if (hasBallot) {
+        await deleteDoc(doc(db, "ballots", codeId));
+      }
+      alert(`${codeId} 참여코드를 삭제했습니다.`);
+    } catch (error) {
+      alert(`참여코드 삭제 중 오류가 발생했습니다: ${error.message}`);
+    }
   };
 
   const resetAllVotes = async () => {
@@ -560,14 +602,31 @@ export default function App() {
               placeholder="새 참여코드 입력"
             />
             <button style={buttonStyle("default")} onClick={addNewCode}>코드 추가</button>
-            <button style={buttonStyle("light")} onClick={seedExampleCodes}>예시 코드 5개 추가</button>
+            <button style={buttonStyle("light")} onClick={seedExampleCodes}>코드 추가 생성</button>
           </div>
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
             {codes.map((code) => {
               const responded = ballots.some((b) => b.code === code.id);
               return (
-                <div key={code.id} style={{ border: "1px solid #d1d5db", borderRadius: 999, padding: "6px 10px", fontSize: 13 }}>
-                  {code.id} {responded ? "· 응답 있음" : "· 미응답"}
+                <div
+                  key={code.id}
+                  style={{
+                    border: "1px solid #d1d5db",
+                    borderRadius: 10,
+                    padding: "8px 10px",
+                    fontSize: 13,
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                    gap: 12,
+                  }}
+                >
+                  <div>
+                    <strong>{code.id}</strong> {responded ? "· 응답 있음" : "· 미응답"}
+                  </div>
+                  <button style={buttonStyle("danger")} onClick={() => deleteCode(code.id)}>
+                    코드 삭제
+                  </button>
                 </div>
               );
             })}
